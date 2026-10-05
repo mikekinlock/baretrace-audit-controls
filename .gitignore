@@ -1,0 +1,25 @@
+# Terraform
+**/.terraform/
+**/.terraform-build/
+*.tfstate
+*.tfstate.*
+*.tfplan
+plan.json
+.terraform.lock.hcl.bak
+
+# This stack has no per-environment posture and therefore no tfvars files.
+# Anything matching these is a local override that could carry an address or
+# credential, so it stays out of git.
+*.tfvars
+*.auto.tfvars
+
+# Build output
+build/
+
+# Credentials — belt and braces, these should never be in the tree
+.env
+.env.*
+*.pem
+
+# macOS
+.DS_Store

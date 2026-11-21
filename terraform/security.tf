@@ -98,6 +98,13 @@ resource "aws_guardduty_detector_feature" "enabled" {
   detector_id = aws_guardduty_detector.main.id
   name        = each.key
   status      = "ENABLED"
+
+  # AWS adds sub-features on its own (RDS_LOGIN_EVENTS came back from the first
+  # apply with RDS_DATA_RISK enabled). Without this every plan would try to strip
+  # them; AWS's defaults for sub-features are kept, the features themselves are ours.
+  lifecycle {
+    ignore_changes = [additional_configuration]
+  }
 }
 
 # ---------------------------------------------------------------------------

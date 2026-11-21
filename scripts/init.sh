@@ -5,7 +5,8 @@
 # Builds the four -backend-config flags from environment variables so the
 # Makefile does not need to interpolate them into a shell string. The Makefile
 # exports STATE_BUCKET, STATE_KEY, STATE_REGION, and AWS_PROFILE; this script
-# validates that each is set and passes them to `terraform init`.
+# validates that the first three are set and passes them to `terraform init`, plus the
+# profile when AWS_PROFILE is non-empty.
 #
 # Usage: scripts/init.sh <init|init-upgrade|init-migrate>
 # ---------------------------------------------------------------------------
@@ -46,13 +47,19 @@ esac
 BUCKET="${STATE_BUCKET:?STATE_BUCKET is not set}"
 KEY="${STATE_KEY:?STATE_KEY is not set}"
 REGION="${STATE_REGION:?STATE_REGION is not set}"
-PROFILE="${AWS_PROFILE:?AWS_PROFILE is not set}"
+
+# An empty AWS_PROFILE (CI: `make init AWS_PROFILE=`) means the credentials come
+# from the environment (GitHub OIDC), so no profile is passed to the backend.
+PROFILE_FLAG=()
+if [ -n "${AWS_PROFILE:-}" ]; then
+	PROFILE_FLAG=(-backend-config="profile=${AWS_PROFILE}")
+fi
 
 echo "==> terraform init (mode: $MODE)"
-terraform -chdir=terraform init $EXTRA_FLAG \
+terraform -chdir=terraform init -input=false $EXTRA_FLAG \
 	-backend-config="bucket=${BUCKET}" \
 	-backend-config="key=${KEY}" \
 	-backend-config="region=${REGION}" \
-	-backend-config="profile=${PROFILE}"
+	"${PROFILE_FLAG[@]}"
 
 echo "==> init complete"

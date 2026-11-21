@@ -59,27 +59,34 @@ variable "cloudtrail_retention_days" {
   }
 }
 
-variable "security_alert_email" {
+variable "security_alert_email_parameter" {
   description = <<-EOT
-    Address subscribed to the GuardDuty finding topic. Null by default, which
-    means THE TOPIC IS CREATED AND NOBODY IS SUBSCRIBED TO IT.
+    Name of the SSM parameter holding the address subscribed to the GuardDuty
+    finding topic. The address itself is never a variable and never committed:
+    this repository is public, so its Actions logs are public too, and a named
+    individual's address would be personal data in a file nobody reviews for it.
+    Terraform marks the data source value sensitive, so it stays out of plans
+    and logs.
 
-    That default is a real gap, stated rather than hidden: a detector with no
-    subscriber satisfies "GuardDuty is enabled" and does nothing for Art. 33,
-    which turns on somebody becoming aware. Findings sit in a console no one is
-    required to open.
+    The owner creates the parameter once, by hand, before the first plan:
 
-    Null rather than a committed address on purpose. A named individual's work
-    address in a public-ish repository is itself personal data in a file nobody
-    reviews for it, and it would go stale the moment that person changes role.
-    Supply it at apply time instead:
+      aws ssm put-parameter --name /baretrace/audit/security-alert-email \
+        --type String --value <address>
 
-      make apply TF_CLI_ARGS="-var=security_alert_email=..."
+    Ideally the value is a distribution list or an alerting integration, not one
+    person; it goes stale the moment that person changes role.
 
-    or, better, point it at a distribution list or an alerting integration that is
-    not one person. Confirming the SNS subscription still requires clicking a link
-    in the delivered email; Terraform cannot do that step.
+    THE PLAN FAILS IF THE PARAMETER IS MISSING. That is intended: a detector
+    nobody hears from satisfies "GuardDuty is enabled" and does nothing for
+    Art. 33, which turns on somebody becoming aware, so there is no silent
+    no-subscriber default. Confirming the SNS subscription still requires
+    clicking the link in the delivered email; Terraform cannot do that step.
   EOT
   type        = string
-  default     = null
+  default     = "/baretrace/audit/security-alert-email"
+
+  validation {
+    condition     = startswith(var.security_alert_email_parameter, "/")
+    error_message = "security_alert_email_parameter must be an SSM parameter name starting with \"/\"."
+  }
 }

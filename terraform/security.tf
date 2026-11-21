@@ -195,12 +195,14 @@ resource "aws_cloudwatch_event_target" "guardduty_findings" {
 }
 
 # ---------------------------------------------------------------------------
-# The subscription, only if an address was supplied.
+# The subscription, with the address read from SSM.
 #
-# THE DEFAULT IS NO SUBSCRIBER, which means findings reach nobody. That gap is
-# recorded in baretrace-global-infrastructure specs/HANDOVER.md rather than papered over with a committed address:
-# a named individual's address in a committed file is personal data in a file nobody
-# reviews for it, and it goes stale the moment that person changes role.
+# The address lives in an SSM parameter the owner creates by hand, because this
+# repository is public: a committed address is personal data in a file nobody
+# reviews for it, and the Actions logs are public. The data source value is
+# sensitive, so it stays out of plans and logs. A missing parameter fails the
+# plan on purpose: the old default of no subscriber meant findings reached
+# nobody. There is no `count` because a count cannot depend on a sensitive value.
 #
 # Terraform cannot finish this either way — an email subscription stays
 # `pending confirmation` until someone clicks the link AWS sends, and the resource
@@ -208,12 +210,14 @@ resource "aws_cloudwatch_event_target" "guardduty_findings" {
 # and check SubscriptionArn is an ARN rather than the literal string
 # "PendingConfirmation". See baretrace-global-infrastructure specs/tasks.md task 25.
 # ---------------------------------------------------------------------------
-resource "aws_sns_topic_subscription" "security_alerts_email" {
-  count = var.security_alert_email != null ? 1 : 0
+data "aws_ssm_parameter" "security_alert_email" {
+  name = var.security_alert_email_parameter
+}
 
+resource "aws_sns_topic_subscription" "security_alerts_email" {
   topic_arn = aws_sns_topic.security_alerts.arn
   protocol  = "email"
-  endpoint  = var.security_alert_email
+  endpoint  = data.aws_ssm_parameter.security_alert_email.value
 }
 
 # ===========================================================================

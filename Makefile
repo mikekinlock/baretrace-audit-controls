@@ -37,6 +37,11 @@
 # second detector and a second trail. This stack itself can be applied at any
 # time, once.
 #
+# CI applies it from the `stage` branch only (there is no production branch for
+# this repository). The alert address is not a variable here: Terraform reads it
+# from the SSM parameter /baretrace/audit/security-alert-email, which the owner
+# creates by hand, so it never appears in this public repository or its logs.
+#
 # There is no disarm/rearm pair here. Nothing in this stack has deletion
 # protection, so there is nothing to disarm before a teardown.
 # ---------------------------------------------------------------------------
@@ -46,6 +51,8 @@ SHELL := /usr/bin/env bash
 
 # --- Identity ---------------------------------------------------------------
 
+# CI passes AWS_PROFILE= (empty): the credentials then come from the environment
+# (GitHub OIDC), and no --profile or backend profile is used.
 AWS_PROFILE    ?= private
 AWS_REGION     ?= eu-central-1
 AWS_ACCOUNT_ID ?= 609106090153
@@ -83,7 +90,7 @@ DESTROY_PLAN_FILE := terraform-destroy.tfplan
 
 TF := terraform -chdir=$(TF_DIR)
 
-AWS := aws --profile $(AWS_PROFILE) --region $(AWS_REGION)
+AWS := aws $(if $(AWS_PROFILE),--profile $(AWS_PROFILE)) --region $(AWS_REGION)
 
 # The four state-location values are exported so scripts/init.sh can build
 # the -backend-config flags from them.

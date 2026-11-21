@@ -1,8 +1,9 @@
 # Pull requests into stage: the offline build, then a Terraform plan. Nothing is applied.
 #
-# This account-level stack has no environment; the stage branch is its only deployer
+# This account-level stack has one state, detector and trail; the environment (the base
+# branch) only names the alert parameter path, and stage is its only deployer today
 # (there is no production branch). The repository is PUBLIC, so these logs are public:
-# the alert address is read from SSM by Terraform as a sensitive value and never printed.
+# the alert address is an SSM parameter the owner sets by hand and is never printed.
 #
 # AWS access is GitHub OIDC; the baretrace-terraform role trusts any branch or pull
 # request of repo:mikekinlock/baretrace-audit-controls (immutable subject: owner and repository IDs).
@@ -40,6 +41,7 @@ jobs:
       id-token: write
     env:
       AWS_PROFILE: "" # credentials come from OIDC, see the Makefile
+      ENVIRONMENT: ${{ github.base_ref }} # names the alert parameter path
       TF_INPUT: "0" # never prompt in CI
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

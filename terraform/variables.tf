@@ -1,8 +1,24 @@
 # ---------------------------------------------------------------------------
 # This stack has no per-environment posture: it is applied once per account and
-# covers both environments. There are therefore no variables without defaults
-# and no tfvars files — every variable here carries its own default.
+# covers both environments. The two variables without defaults (environment and
+# alert_subscription_enabled) come from terraform/variables/<environment>.tfvars
+# and the -var flags in the Makefile; every other variable carries its own default.
 # ---------------------------------------------------------------------------
+
+variable "environment" {
+  description = "Names the alert parameter path only: this stack is still account-level (one detector, one trail, one state), so nothing else varies with it. CI deploys from stage only today."
+  type        = string
+
+  validation {
+    condition     = contains(["stage", "production"], var.environment)
+    error_message = "environment must be \"stage\" or \"production\"."
+  }
+}
+
+variable "alert_subscription_enabled" {
+  description = "Whether the email subscription to the GuardDuty finding topic exists. Keep false until the owner has set the alert parameter by hand; see the order in security.tf."
+  type        = bool
+}
 
 # --- Identity ---------------------------------------------------------------
 
@@ -56,37 +72,5 @@ variable "cloudtrail_retention_days" {
   validation {
     condition     = var.cloudtrail_retention_days >= 1
     error_message = "cloudtrail_retention_days must be at least 1; an S3 lifecycle expiration of 0 days is rejected."
-  }
-}
-
-variable "security_alert_email_parameter" {
-  description = <<-EOT
-    Name of the SSM parameter holding the address subscribed to the GuardDuty
-    finding topic. The address itself is never a variable and never committed:
-    this repository is public, so its Actions logs are public too, and a named
-    individual's address would be personal data in a file nobody reviews for it.
-    Terraform marks the data source value sensitive, so it stays out of plans
-    and logs.
-
-    The owner creates the parameter once, by hand, before the first plan:
-
-      aws ssm put-parameter --name /baretrace/audit/security-alert-email \
-        --type String --value <address>
-
-    Ideally the value is a distribution list or an alerting integration, not one
-    person; it goes stale the moment that person changes role.
-
-    THE PLAN FAILS IF THE PARAMETER IS MISSING. That is intended: a detector
-    nobody hears from satisfies "GuardDuty is enabled" and does nothing for
-    Art. 33, which turns on somebody becoming aware, so there is no silent
-    no-subscriber default. Confirming the SNS subscription still requires
-    clicking the link in the delivered email; Terraform cannot do that step.
-  EOT
-  type        = string
-  default     = "/baretrace/audit/security-alert-email"
-
-  validation {
-    condition     = startswith(var.security_alert_email_parameter, "/")
-    error_message = "security_alert_email_parameter must be an SSM parameter name starting with \"/\"."
   }
 }

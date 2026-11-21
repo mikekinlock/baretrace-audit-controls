@@ -195,29 +195,55 @@ resource "aws_cloudwatch_event_target" "guardduty_findings" {
 }
 
 # ---------------------------------------------------------------------------
-# The subscription, with the address read from SSM.
+# The alert address: an SSM parameter Terraform creates and the owner fills in.
 #
-# The address lives in an SSM parameter the owner creates by hand, because this
-# repository is public: a committed address is personal data in a file nobody
-# reviews for it, and the Actions logs are public. The data source value is
-# sensitive, so it stays out of plans and logs. A missing parameter fails the
-# plan on purpose: the old default of no subscriber meant findings reached
-# nobody. There is no `count` because a count cannot depend on a sensitive value.
+# The repository is PUBLIC, so a committed address would be personal data in a
+# file nobody reviews for it, and the Actions logs are public too. Terraform
+# therefore creates the parameter with a placeholder and never holds the address
+# in code. The value is sensitive, so it stays out of plans and logs.
+# ---------------------------------------------------------------------------
+resource "aws_ssm_parameter" "security_alert_email" {
+  name        = local.alert_email_parameter
+  type        = "SecureString"             # default alias/aws/ssm key
+  value       = jsonencode({ email = "" }) # placeholder: the owner fills in the email field
+  description = "Address for GuardDuty finding alerts. Set by hand; Terraform only creates it."
+
+  # The owner sets the real address by hand, so a later apply must not reset it to
+  # the placeholder. A refresh still reads the real value into state; the state
+  # bucket is private and encrypted. To set it:
+  #   aws ssm put-parameter --profile private --region eu-central-1 \
+  #     --name <path> --type SecureString --overwrite \
+  #     --value '{"email":"alerts@example.com"}'
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+# The order matters, because the subscription needs the real address:
+#   1. Deploy with alert_subscription_enabled = false; the parameter is created
+#      with the placeholder document {"email": ""}.
+#   2. The owner sets the email field by hand.
+#   3. A pull request flips the tfvars to true; the subscription is created.
+#   4. The owner clicks the confirmation link in the email.
 #
-# Terraform cannot finish this either way — an email subscription stays
+# Terraform cannot finish step 4 — an email subscription stays
 # `pending confirmation` until someone clicks the link AWS sends, and the resource
 # reads as created regardless. Verify with `aws sns list-subscriptions-by-topic`
 # and check SubscriptionArn is an ARN rather than the literal string
 # "PendingConfirmation". See baretrace-global-infrastructure specs/tasks.md task 25.
-# ---------------------------------------------------------------------------
-data "aws_ssm_parameter" "security_alert_email" {
-  name = var.security_alert_email_parameter
-}
-
 resource "aws_sns_topic_subscription" "security_alerts_email" {
+  count = var.alert_subscription_enabled ? 1 : 0
+
   topic_arn = aws_sns_topic.security_alerts.arn
   protocol  = "email"
-  endpoint  = data.aws_ssm_parameter.security_alert_email.value
+  endpoint  = local.alert_email
+
+  lifecycle {
+    precondition {
+      condition     = strcontains(local.alert_email, "@")
+      error_message = "Set the email field of the alert parameter by hand first (see the comment on aws_ssm_parameter.security_alert_email), then enable the subscription."
+    }
+  }
 }
 
 # ===========================================================================

@@ -1,4 +1,4 @@
 # Selected by `make plan ENVIRONMENT=stage`. Carries no address: the alert address
 # lives in an SSM parameter the owner sets by hand.
-# Keep false until the owner has set that parameter; see security.tf for the order.
-alert_subscription_enabled = false
+# The owner set the email field on 2026-11-21; see security.tf for the order.
+alert_subscription_enabled = true

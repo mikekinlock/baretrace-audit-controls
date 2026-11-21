@@ -1,12 +1,13 @@
 # ---------------------------------------------------------------------------
 # Terraform entry point.
 #
-# This stack is applied ONCE PER ACCOUNT and has no environment dimension.
-# It holds the account's only GuardDuty detector and the only CloudTrail
-# trail, because AWS permits one detector per account per region. A trail
-# covering both environments must not claim one, so there is no
-# `environment` variable, no per-environment tfvars file, and no
-# `Environment` tag on any resource.
+# This stack is applied ONCE PER ACCOUNT. It holds the account's only GuardDuty
+# detector and the only CloudTrail trail, because AWS permits one detector per
+# account per region. A trail covering both environments must not claim one, so
+# there is one state, one detector, one trail, and no `Environment` tag on any
+# resource. ENVIRONMENT only names the alert parameter path
+# (/baretrace/<stage|production>/audit/security-alert-email) and selects
+# terraform/variables/<environment>.tfvars.
 #
 # The same two plumbing problems as the sibling stacks apply. The `private`
 # AWS profile has no default region, so every bare `terraform` or `aws`
@@ -37,6 +38,11 @@
 # second detector and a second trail. This stack itself can be applied at any
 # time, once.
 #
+# CI applies it from the `stage` branch only (there is no production branch for
+# this repository). The alert address is not a variable here: Terraform creates
+# the SSM parameter with a placeholder and the owner sets the real address by
+# hand, so it never appears in this public repository or its logs.
+#
 # There is no disarm/rearm pair here. Nothing in this stack has deletion
 # protection, so there is nothing to disarm before a teardown.
 # ---------------------------------------------------------------------------
@@ -46,19 +52,28 @@ SHELL := /usr/bin/env bash
 
 # --- Identity ---------------------------------------------------------------
 
+# CI passes AWS_PROFILE= (empty): the credentials then come from the environment
+# (GitHub OIDC), and no --profile or backend profile is used.
 AWS_PROFILE    ?= private
 AWS_REGION     ?= eu-central-1
 AWS_ACCOUNT_ID ?= 609106090153
 
-PROJECT ?= baretrace
-OWNER   ?= michaelkinlock
+PROJECT     ?= baretrace
+ENVIRONMENT ?= stage
+OWNER       ?= michaelkinlock
+
+# Only the alert parameter path and the tfvars file depend on it, so a typo
+# would otherwise surface as a missing file or a surprising path.
+ifeq ($(filter $(ENVIRONMENT),stage production),)
+$(error ENVIRONMENT must be stage or production, got "$(ENVIRONMENT)")
+endif
 
 # --- Remote state -----------------------------------------------------------
 # The bucket is pre-existing, account-level shared infrastructure. Nothing in
 # this repository creates or manages it, and there is no bootstrap stack.
 #
 # There is no environment segment in the key: this stack is applied once per
-# account and covers both environments.
+# account and covers both environments, whatever ENVIRONMENT says.
 
 STATE_BUCKET ?= terraform-$(AWS_ACCOUNT_ID)-state
 STATE_KEY    ?= BaretraceAuditControls/state.tfstate
@@ -83,19 +98,21 @@ DESTROY_PLAN_FILE := terraform-destroy.tfplan
 
 TF := terraform -chdir=$(TF_DIR)
 
-AWS := aws --profile $(AWS_PROFILE) --region $(AWS_REGION)
+AWS := aws $(if $(AWS_PROFILE),--profile $(AWS_PROFILE)) --region $(AWS_REGION)
 
 # The four state-location values are exported so scripts/init.sh can build
 # the -backend-config flags from them.
 export STATE_BUCKET STATE_KEY STATE_REGION AWS_PROFILE
 
-# No environment variable and no var-file: this stack is applied once per
-# account and covers both environments. The four -var flags are the whole
-# posture.
+# ENVIRONMENT drives both the var-file and the -var, so the file name and the
+# variable inside the stack cannot disagree. It only names the alert parameter:
+# the state, the detector and the trail are the account's, whatever it says.
 TF_VARS := \
+	-var-file=variables/$(ENVIRONMENT).tfvars \
 	-var="region=$(AWS_REGION)" \
 	-var="profile=$(AWS_PROFILE)" \
 	-var="project=$(PROJECT)" \
+	-var="environment=$(ENVIRONMENT)" \
 	-var="owner=$(OWNER)"
 
 .PHONY: help fmt fmt-check validate check preflight init init-upgrade init-migrate \
@@ -106,11 +123,12 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo
-	@echo "Settings (override on the command line, e.g. make plan PROJECT=other):"
+	@echo "Settings (override on the command line, e.g. make plan ENVIRONMENT=production):"
 	@printf "  %-16s %s\n" \
 		AWS_PROFILE   "$(AWS_PROFILE)" \
 		AWS_REGION    "$(AWS_REGION)" \
 		PROJECT       "$(PROJECT)" \
+		ENVIRONMENT   "$(ENVIRONMENT)" \
 		STATE_BUCKET  "$(STATE_BUCKET)" \
 		STATE_KEY     "$(STATE_KEY)"
 
@@ -128,8 +146,8 @@ validate: ## Validate configuration (requires init)
 check: fmt-check validate ## Everything a commit should pass
 
 # Confirms credentials and the state bucket before a plan spends a minute
-# failing on them. There is no var file to check and no upstream stack to
-# verify — this stack is the account-level audit trail.
+# failing on them. There is no upstream stack to verify — this stack is the
+# account-level audit trail.
 preflight: ## Verify credentials and the state bucket
 	@echo "identity : $$($(AWS) sts get-caller-identity --query Arn --output text)"
 	@echo "state    : $$($(AWS) s3api head-bucket --bucket $(STATE_BUCKET) 2>&1 \

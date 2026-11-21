@@ -1,0 +1,58 @@
+# Pushes to stage (a merged pull request): the offline build, then plan and apply.
+# This account-level stack has one state, detector and trail; the environment (the
+# branch) only names the alert parameter path, and stage is its only deployer today (there
+# is no production branch). The repository is PUBLIC, so these logs are public: the alert
+# address is an SSM parameter the owner sets by hand and is never printed.
+#
+# `make apply` applies the plan `make plan` saved, so what is applied is what the
+# plan step printed. AWS access is GitHub OIDC; the baretrace-terraform role
+# trusts any branch or pull request of
+# repo:mikekinlock/baretrace-audit-controls (immutable subject: owner and repository IDs).
+name: Deployment
+
+on:
+  push:
+    branches: [stage]
+
+permissions:
+  contents: read
+
+# One deployer for the account's single detector and trail, never cancelled halfway.
+concurrency:
+  group: deploy-audit-controls
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: make build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_PROFILE: "" # credentials come from OIDC, see the Makefile
+      ENVIRONMENT: ${{ github.ref_name }} # names the alert parameter path
+      TF_INPUT: "0" # never prompt in CI
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::609106090153:role/baretrace-terraform
+          role-session-name: audit-deploy-${{ github.run_id }}
+          aws-region: eu-central-1
+
+      - name: plan
+        run: make init && make plan
+      - name: apply
+        run: make apply

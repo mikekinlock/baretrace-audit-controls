@@ -1,8 +1,24 @@
 # ---------------------------------------------------------------------------
 # This stack has no per-environment posture: it is applied once per account and
-# covers both environments. There are therefore no variables without defaults
-# and no tfvars files — every variable here carries its own default.
+# covers both environments. The two variables without defaults (environment and
+# alert_subscription_enabled) come from terraform/variables/<environment>.tfvars
+# and the -var flags in the Makefile; every other variable carries its own default.
 # ---------------------------------------------------------------------------
+
+variable "environment" {
+  description = "Names the alert parameter path only: this stack is still account-level (one detector, one trail, one state), so nothing else varies with it. CI deploys from stage only today."
+  type        = string
+
+  validation {
+    condition     = contains(["stage", "production"], var.environment)
+    error_message = "environment must be \"stage\" or \"production\"."
+  }
+}
+
+variable "alert_subscription_enabled" {
+  description = "Whether the email subscription to the GuardDuty finding topic exists. Keep false until the owner has set the alert parameter by hand; see the order in security.tf."
+  type        = bool
+}
 
 # --- Identity ---------------------------------------------------------------
 
@@ -57,29 +73,4 @@ variable "cloudtrail_retention_days" {
     condition     = var.cloudtrail_retention_days >= 1
     error_message = "cloudtrail_retention_days must be at least 1; an S3 lifecycle expiration of 0 days is rejected."
   }
-}
-
-variable "security_alert_email" {
-  description = <<-EOT
-    Address subscribed to the GuardDuty finding topic. Null by default, which
-    means THE TOPIC IS CREATED AND NOBODY IS SUBSCRIBED TO IT.
-
-    That default is a real gap, stated rather than hidden: a detector with no
-    subscriber satisfies "GuardDuty is enabled" and does nothing for Art. 33,
-    which turns on somebody becoming aware. Findings sit in a console no one is
-    required to open.
-
-    Null rather than a committed address on purpose. A named individual's work
-    address in a public-ish repository is itself personal data in a file nobody
-    reviews for it, and it would go stale the moment that person changes role.
-    Supply it at apply time instead:
-
-      make apply TF_CLI_ARGS="-var=security_alert_email=..."
-
-    or, better, point it at a distribution list or an alerting integration that is
-    not one person. Confirming the SNS subscription still requires clicking a link
-    in the delivered email; Terraform cannot do that step.
-  EOT
-  type        = string
-  default     = null
 }

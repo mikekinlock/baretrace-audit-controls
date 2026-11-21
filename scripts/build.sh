@@ -26,6 +26,9 @@ terraform -chdir=terraform fmt -check -recursive
 echo "==> terraform validate"
 terraform -chdir=terraform validate
 
+echo "==> terraform test"
+terraform -chdir=terraform test
+
 # --- Go builds (only if the directories exist) ------------------------------
 
 # Lambda handlers: compile each lambdas/ subdirectory as a linux/arm64 binary.

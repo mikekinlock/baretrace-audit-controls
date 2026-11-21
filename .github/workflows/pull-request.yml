@@ -1,0 +1,57 @@
+# Pull requests into stage: the offline build, then a Terraform plan. Nothing is applied.
+#
+# This account-level stack has one state, detector and trail; the environment (the base
+# branch) only names the alert parameter path, and stage is its only deployer today
+# (there is no production branch). The repository is PUBLIC, so these logs are public:
+# the alert address is an SSM parameter the owner sets by hand and is never printed.
+#
+# AWS access is GitHub OIDC; the baretrace-terraform role trusts any branch or pull
+# request of repo:mikekinlock/baretrace-audit-controls (immutable subject: owner and repository IDs).
+name: Pull Request
+
+on:
+  pull_request:
+    branches: [stage]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: make build
+
+  plan:
+    needs: build
+    # Pull requests from forks of this public repository never get AWS credentials
+    # (they get the offline build only).
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_PROFILE: "" # credentials come from OIDC, see the Makefile
+      ENVIRONMENT: ${{ github.base_ref }} # names the alert parameter path
+      TF_INPUT: "0" # never prompt in CI
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::609106090153:role/baretrace-terraform
+          role-session-name: audit-pr-${{ github.event.pull_request.number }}
+          aws-region: eu-central-1
+
+      - run: make init
+      - run: make plan

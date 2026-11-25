@@ -18,27 +18,36 @@ override_data {
   values = { account_id = "609106090153" }
 }
 
-run "stage_path" {
+run "both_parameters" {
   command = plan
 
   variables {
-    environment                = "stage"
     alert_subscription_enabled = false
   }
 
   assert {
-    condition     = aws_ssm_parameter.security_alert_email.name == "/baretrace/stage/audit/security-alert-email"
+    condition     = aws_ssm_parameter.security_alert_email["stage"].name == "/baretrace/stage/audit/security-alert-email"
     error_message = "the stage parameter path must carry stage"
   }
 
   assert {
-    condition     = aws_ssm_parameter.security_alert_email.type == "SecureString"
-    error_message = "the alert address must be stored as a SecureString"
+    condition     = aws_ssm_parameter.security_alert_email["production"].name == "/baretrace/production/audit/security-alert-email"
+    error_message = "the production parameter path must carry production"
   }
 
   assert {
-    condition     = aws_ssm_parameter.security_alert_email.value == jsonencode({ email = "" })
-    error_message = "Terraform must create the parameter with the placeholder, never an address"
+    condition     = length(aws_ssm_parameter.security_alert_email) == 2
+    error_message = "exactly one parameter per environment, stage and production"
+  }
+
+  assert {
+    condition     = alltrue([for p in aws_ssm_parameter.security_alert_email : p.type == "SecureString"])
+    error_message = "every alert address must be stored as a SecureString"
+  }
+
+  assert {
+    condition     = alltrue([for p in aws_ssm_parameter.security_alert_email : p.value == jsonencode({ email = "" })])
+    error_message = "Terraform must create every parameter with the placeholder, never an address"
   }
 
   assert {
@@ -47,44 +56,41 @@ run "stage_path" {
   }
 }
 
-run "production_path" {
-  command = plan
-
-  variables {
-    environment                = "production"
-    alert_subscription_enabled = false
-  }
-
-  assert {
-    condition     = aws_ssm_parameter.security_alert_email.name == "/baretrace/production/audit/security-alert-email"
-    error_message = "the production parameter path is carries production"
-  }
-}
-
 # Not tested: the enabled path with a real address (endpoint, protocol) and a
 # non-JSON value. The value is a configured attribute, and override_resource only
 # fills computed ones, so a mocked plan or apply always sees the empty placeholder
 # document. Both cases are checked by the first real plan after the owner sets
-# the parameter.
+# the parameter. The `moved` block (stage parameter kept, not replaced) is checked
+# by the real plan too: a mocked plan starts from an empty state.
 
 run "placeholder_refused" {
   command = plan
 
   variables {
-    environment                = "stage"
     alert_subscription_enabled = true
   }
 
   expect_failures = [aws_sns_topic_subscription.security_alerts_email]
 }
 
-run "bad_environment" {
+run "placeholder_refused_for_production_address" {
   command = plan
 
   variables {
-    environment                = "prod"
-    alert_subscription_enabled = false
+    alert_subscription_enabled = true
+    alert_address_environment  = "production"
   }
 
-  expect_failures = [var.environment]
+  expect_failures = [aws_sns_topic_subscription.security_alerts_email]
+}
+
+run "bad_address_environment" {
+  command = plan
+
+  variables {
+    alert_subscription_enabled = false
+    alert_address_environment  = "prod"
+  }
+
+  expect_failures = [var.alert_address_environment]
 }

@@ -1,17 +1,19 @@
 # ---------------------------------------------------------------------------
 # This stack has no per-environment posture: it is applied once per account and
-# covers both environments. The two variables without defaults (environment and
-# alert_subscription_enabled) come from terraform/variables/<environment>.tfvars
-# and the -var flags in the Makefile; every other variable carries its own default.
+# covers both environments, so it has no environment variable. It creates the alert
+# parameter of BOTH environments. The variable without a default
+# (alert_subscription_enabled) comes from terraform/variables/account.tfvars; every
+# other variable carries its own default.
 # ---------------------------------------------------------------------------
 
-variable "environment" {
-  description = "Names the alert parameter path only: this stack is still account-level (one detector, one trail, one state), so nothing else varies with it. CI deploys from stage only today."
+variable "alert_address_environment" {
+  description = "Whose alert parameter the account's security topic mails: GuardDuty findings cover the whole account, so the topic takes the address of one environment. Stage, because its parameter is the one filled in today."
   type        = string
+  default     = "stage"
 
   validation {
-    condition     = contains(["stage", "production"], var.environment)
-    error_message = "environment must be \"stage\" or \"production\"."
+    condition     = contains(["stage", "production"], var.alert_address_environment)
+    error_message = "alert_address_environment must be \"stage\" or \"production\"."
   }
 }
 

@@ -209,10 +209,15 @@ resource "aws_cloudwatch_event_target" "guardduty_findings" {
 # therefore creates the parameter with a placeholder and never holds the address
 # in code. The value is sensitive, so it stays out of plans and logs.
 # ---------------------------------------------------------------------------
+# One per environment (stage and production) in this single state; every BareTrace
+# stack of that environment reads it for its own alert topic.
 resource "aws_ssm_parameter" "security_alert_email" {
-  name        = local.alert_email_parameter
-  type        = "SecureString"             # default alias/aws/ssm key
-  value       = jsonencode({ email = "" }) # placeholder: the owner fills in the email field
+  for_each = local.alert_email_parameters
+
+  name  = each.value
+  type  = "SecureString"             # default alias/aws/ssm key
+  value = jsonencode({ email = "" }) # placeholder: the owner fills in the email field
+  # Unchanged text, so the existing stage parameter is not rewritten (a new description is a new version).
   description = "Address for GuardDuty finding alerts. Set by hand; Terraform only creates it."
 
   # The owner sets the real address by hand, so a later apply must not reset it to
@@ -224,6 +229,14 @@ resource "aws_ssm_parameter" "security_alert_email" {
   lifecycle {
     ignore_changes = [value]
   }
+}
+
+# Until 2026-11-25 the stack had one parameter, named after an `environment` variable,
+# so production's could only replace stage's. The stage parameter keeps its address:
+# this renames it in state, nothing is destroyed or recreated.
+moved {
+  from = aws_ssm_parameter.security_alert_email
+  to   = aws_ssm_parameter.security_alert_email["stage"]
 }
 
 # The order matters, because the subscription needs the real address:

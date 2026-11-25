@@ -1,7 +1,6 @@
 # Pushes to stage (a merged pull request): the offline build, then plan and apply.
-# This account-level stack has one state, detector and trail; the environment (the
-# branch) only names the alert parameter path, and stage is its only deployer today (there
-# is no production branch). The repository is PUBLIC, so these logs are public: the alert
+# This account-level stack has one state, detector and trail, and creates the alert
+# parameter of both environments; stage is its only deployer. The repository is PUBLIC, so these logs are public: the alert
 # address is an SSM parameter the owner sets by hand and is never printed.
 #
 # `make apply` applies the plan `make plan` saved, so what is applied is what the
@@ -40,7 +39,6 @@ jobs:
       id-token: write
     env:
       AWS_PROFILE: "" # credentials come from OIDC, see the Makefile
-      ENVIRONMENT: ${{ github.ref_name }} # names the alert parameter path
       TF_INPUT: "0" # never prompt in CI
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

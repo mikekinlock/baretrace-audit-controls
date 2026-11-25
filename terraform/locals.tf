@@ -5,13 +5,19 @@ locals {
   # Not a published contract: no other repository looks these up by name.
   account_prefix = "${var.project}-account"
 
-  # The alert parameter path carries the environment.
-  alert_email_parameter = "/${var.project}/${var.environment}/audit/security-alert-email"
+  # One alert parameter per environment, all in this one account-level state:
+  # /baretrace/<env>/audit/security-alert-email. The other stacks of an environment
+  # read their own environment's parameter (alert_subscription_enabled in each repo).
+  environments = toset(["stage", "production"])
+  alert_email_parameters = {
+    for env in local.environments : env => "/${var.project}/${env}/audit/security-alert-email"
+  }
 
   # The parameter holds a JSON document, {"email": "..."}, that the owner fills in
   # by hand. try() turns a missing field or a non-JSON value into "", which the
-  # subscription precondition (an address must contain "@") refuses.
-  alert_email = try(jsondecode(aws_ssm_parameter.security_alert_email.value).email, "")
+  # subscription precondition (an address must contain "@") refuses. The account's
+  # security topic covers both environments and mails the address of one of them.
+  alert_email = try(jsondecode(aws_ssm_parameter.security_alert_email[var.alert_address_environment].value).email, "")
 
   # Applied to everything through `default_tags` on the provider.
   #

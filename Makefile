@@ -5,9 +5,9 @@
 # detector and the only CloudTrail trail, because AWS permits one detector per
 # account per region. A trail covering both environments must not claim one, so
 # there is one state, one detector, one trail, and no `Environment` tag on any
-# resource. ENVIRONMENT only names the alert parameter path
-# (/baretrace/<stage|production>/audit/security-alert-email) and selects
-# terraform/variables/<environment>.tfvars.
+# resource. There is no ENVIRONMENT: the stack creates the alert parameter of both
+# environments (/baretrace/<stage|production>/audit/security-alert-email) and reads
+# its settings from terraform/variables/account.tfvars.
 #
 # The same two plumbing problems as the sibling stacks apply. The `private`
 # AWS profile has no default region, so every bare `terraform` or `aws`
@@ -59,21 +59,15 @@ AWS_REGION     ?= eu-central-1
 AWS_ACCOUNT_ID ?= 609106090153
 
 PROJECT     ?= baretrace
-ENVIRONMENT ?= stage
 OWNER       ?= michaelkinlock
 
-# Only the alert parameter path and the tfvars file depend on it, so a typo
-# would otherwise surface as a missing file or a surprising path.
-ifeq ($(filter $(ENVIRONMENT),stage production),)
-$(error ENVIRONMENT must be stage or production, got "$(ENVIRONMENT)")
-endif
 
 # --- Remote state -----------------------------------------------------------
 # The bucket is pre-existing, account-level shared infrastructure. Nothing in
 # this repository creates or manages it, and there is no bootstrap stack.
 #
 # There is no environment segment in the key: this stack is applied once per
-# account and covers both environments, whatever ENVIRONMENT says.
+# account and covers both environments.
 
 STATE_BUCKET ?= terraform-$(AWS_ACCOUNT_ID)-state
 STATE_KEY    ?= BaretraceAuditControls/state.tfstate
@@ -104,15 +98,13 @@ AWS := aws $(if $(AWS_PROFILE),--profile $(AWS_PROFILE)) --region $(AWS_REGION)
 # the -backend-config flags from them.
 export STATE_BUCKET STATE_KEY STATE_REGION AWS_PROFILE
 
-# ENVIRONMENT drives both the var-file and the -var, so the file name and the
-# variable inside the stack cannot disagree. It only names the alert parameter:
-# the state, the detector and the trail are the account's, whatever it says.
+# One var file for the account: the state, the detector, the trail and both
+# environments' alert parameters are the account's.
 TF_VARS := \
-	-var-file=variables/$(ENVIRONMENT).tfvars \
+	-var-file=variables/account.tfvars \
 	-var="region=$(AWS_REGION)" \
 	-var="profile=$(AWS_PROFILE)" \
 	-var="project=$(PROJECT)" \
-	-var="environment=$(ENVIRONMENT)" \
 	-var="owner=$(OWNER)"
 
 .PHONY: help fmt fmt-check validate check preflight init init-upgrade init-migrate \
@@ -123,12 +115,11 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo
-	@echo "Settings (override on the command line, e.g. make plan ENVIRONMENT=production):"
+	@echo "Settings (override on the command line, e.g. make plan AWS_PROFILE=other):"
 	@printf "  %-16s %s\n" \
 		AWS_PROFILE   "$(AWS_PROFILE)" \
 		AWS_REGION    "$(AWS_REGION)" \
 		PROJECT       "$(PROJECT)" \
-		ENVIRONMENT   "$(ENVIRONMENT)" \
 		STATE_BUCKET  "$(STATE_BUCKET)" \
 		STATE_KEY     "$(STATE_KEY)"
 

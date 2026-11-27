@@ -19,6 +19,16 @@ locals {
   # security topic covers both environments and mails the address of one of them.
   alert_email = try(jsondecode(aws_ssm_parameter.security_alert_email[var.alert_address_environment].value).email, "")
 
+  # The PII key and the guest blind-index (MAC) key of each listed environment, by the
+  # aliases baretrace-db-setup gives them. Keyed "<env>/<alias suffix>" for the lookup.
+  pii_key_aliases = {
+    for pair in setproduct(var.pii_key_environments, ["clients-pii", "guest-mac"]) :
+    "${pair[0]}/${pair[1]}" => "alias/${var.project}-${pair[0]}-${pair[1]}"
+  }
+
+  # ARNs of those keys, for filtering key events. Empty until an environment is listed.
+  watched_key_arns = [for k in sort(keys(data.aws_kms_alias.pii_key)) : data.aws_kms_alias.pii_key[k].target_key_arn]
+
   # Applied to everything through `default_tags` on the provider.
   #
   # No Environment tag: this stack is applied once per account and its trail and

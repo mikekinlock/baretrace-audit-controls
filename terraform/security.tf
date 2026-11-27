@@ -12,6 +12,8 @@
 
 data "aws_caller_identity" "current" {}
 
+data "aws_partition" "current" {}
+
 locals {
   # ---------------------------------------------------------------------------
   # GuardDuty features to enable, with the reason each is worth its usage charge.
@@ -197,6 +199,133 @@ resource "aws_cloudwatch_event_rule" "guardduty_findings" {
 
 resource "aws_cloudwatch_event_target" "guardduty_findings" {
   rule      = aws_cloudwatch_event_rule.guardduty_findings.name
+  target_id = "security-alerts"
+  arn       = aws_sns_topic.security_alerts.arn
+}
+
+# ---------------------------------------------------------------------------
+# The PII and blind-index keys, looked up by alias.
+#
+# CreateGrant, PutKeyPolicy and the rest happen routinely on other keys (RDS and
+# Secrets Manager create grants all the time), so the key-change rule below must be
+# filtered to the two keys that guard personal data. Their ARNs are needed, and the
+# keys belong to baretrace-db-setup, so this stack reads them rather than creating
+# them. The lookup fails for a key that does not exist yet, hence
+# var.pii_key_environments: an environment is listed once its database stack exists.
+# ---------------------------------------------------------------------------
+data "aws_kms_alias" "pii_key" {
+  for_each = local.pii_key_aliases
+
+  name = each.value
+}
+
+# ---------------------------------------------------------------------------
+# Changes to the PII keys' policy, grants or state -> security alert topic.
+#
+# The key policy of the PII key is what stops every identity outside the database
+# stack's functions from decrypting customer data (spec admin-and-pii-access 3.2).
+# Whoever weakens that policy, grants themselves use of the key, or disables or
+# schedules deletion of it has defeated the control without ever calling Decrypt, so
+# the change itself is what must raise the alarm.
+#
+# A Terraform apply that changes the policy on purpose also alerts. That is
+# intended: a policy change on these keys should never go unnoticed, and the mail
+# that follows a deliberate change is cheap confirmation that it was the owner.
+#
+# These are write management events, so a rule in the normal ENABLED state sees
+# them. The trail logs all management events, which is what EventBridge needs.
+# The key is matched on `detail.resources[].ARN`, the CloudTrail record's own
+# resource list, which names the key ARN for KMS calls (checked on a stage Decrypt
+# record, 2026-11-27). NOT the top-level `resources` of the EventBridge event: for
+# events delivered via CloudTrail that list is empty, so a pattern on it would never
+# match and the rule would stay silent. Count 0 while no environment is listed: an
+# empty list is not a valid pattern.
+# ---------------------------------------------------------------------------
+resource "aws_cloudwatch_event_rule" "pii_key_changes" {
+  count = length(local.watched_key_arns) > 0 ? 1 : 0
+
+  name        = "${local.account_prefix}-pii-key-changes"
+  description = "Policy, grant and state changes on the PII and blind-index KMS keys, to the security alert topic."
+
+  event_pattern = jsonencode({
+    source      = ["aws.kms"]
+    detail-type = ["AWS API Call via CloudTrail"]
+    detail = {
+      eventSource = ["kms.amazonaws.com"]
+      resources   = { ARN = local.watched_key_arns }
+      eventName = [
+        "PutKeyPolicy",
+        "CreateGrant",
+        "RetireGrant",
+        "RevokeGrant",
+        "ScheduleKeyDeletion",
+        "DisableKey",
+        "DisableKeyRotation",
+      ]
+    }
+  })
+
+  tags = {
+    Name = "${local.account_prefix}-pii-key-changes"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "pii_key_changes" {
+  count = length(aws_cloudwatch_event_rule.pii_key_changes)
+
+  rule      = aws_cloudwatch_event_rule.pii_key_changes[0].name
+  target_id = "security-alerts"
+  arn       = aws_sns_topic.security_alerts.arn
+}
+
+# ---------------------------------------------------------------------------
+# A refused use of any KMS key -> security alert topic.
+#
+# This is what fires when an identity outside the key policy's
+# DenyUseOutsideTheServices list (baretrace-db-setup) tries to use the PII key: the
+# call is refused and CloudTrail records it with an AccessDenied error code.
+#
+# kms:Encrypt, Decrypt, GenerateDataKey and GenerateMac are READ-ONLY management
+# events. EventBridge delivers those only to rules whose state is
+# ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS, and only when the trail logs
+# read-only management events; this trail logs all of them (see the management
+# selector below). Source:
+# https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-service-event-cloudtrail-management.html
+#
+# NOT filtered by key. An AccessDenied on any KMS key is rare and worth a look, and
+# not filtering also covers keys whose ARN this stack cannot look up yet (an
+# environment missing from pii_key_environments).
+# ---------------------------------------------------------------------------
+resource "aws_cloudwatch_event_rule" "kms_access_denied" {
+  name        = "${local.account_prefix}-kms-access-denied"
+  description = "Refused KMS cryptographic calls on any key, to the security alert topic."
+  state       = "ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS"
+
+  event_pattern = jsonencode({
+    source      = ["aws.kms"]
+    detail-type = ["AWS API Call via CloudTrail"]
+    detail = {
+      eventSource = ["kms.amazonaws.com"]
+      eventName = [
+        "Encrypt",
+        "Decrypt",
+        "ReEncrypt",
+        "GenerateDataKey",
+        "GenerateDataKeyWithoutPlaintext",
+        "GenerateMac",
+        "VerifyMac",
+      ]
+      errorCode = [{ prefix = "AccessDenied" }]
+    }
+  })
+
+  tags = {
+    Name = "${local.account_prefix}-kms-access-denied"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "kms_access_denied" {
+  rule      = aws_cloudwatch_event_rule.kms_access_denied.name
   target_id = "security-alerts"
   arn       = aws_sns_topic.security_alerts.arn
 }
@@ -583,6 +712,48 @@ resource "aws_cloudtrail" "main" {
     field_selector {
       field           = "resources.ARN"
       not_starts_with = ["${aws_s3_bucket.audit.arn}/"]
+    }
+  }
+
+  # ---------------------------------------------------------------------------
+  # LAMBDA DATA EVENTS — every Invoke of admin_service and the pii_* functions.
+  #
+  # Records each invocation and who called it. The owner sees customer data only
+  # through these functions, and each such access must be logged (spec
+  # admin-and-pii-access 2.2); an Invoke is not a management event, so without this
+  # selector nothing would record it.
+  #
+  # Both environments, not just pii_key_environments: an ARN prefix needs no lookup,
+  # so production is covered before its functions exist.
+  #
+  # Cost: $0.10 per 100,000 data events. Admin calls are few and pii_* functions run
+  # one to three times per order, so cents per month.
+  #
+  # The first prefix has no trailing separator, so it matches admin_service and, by
+  # accident, a hypothetical admin_service* name; acceptable, such a function
+  # would be an admin function too. The second ends in "pii_" for the pii_* family.
+  # ---------------------------------------------------------------------------
+  advanced_event_selector {
+    name = "Lambda invocations of admin_service and the pii_ functions"
+
+    field_selector {
+      field  = "eventCategory"
+      equals = ["Data"]
+    }
+
+    field_selector {
+      field  = "resources.type"
+      equals = ["AWS::Lambda::Function"]
+    }
+
+    field_selector {
+      field = "resources.ARN"
+      starts_with = flatten([
+        for env in sort(tolist(local.environments)) : [
+          "arn:${data.aws_partition.current.partition}:lambda:${var.region}:${data.aws_caller_identity.current.account_id}:function:${var.project}-${env}-admin_service",
+          "arn:${data.aws_partition.current.partition}:lambda:${var.region}:${data.aws_caller_identity.current.account_id}:function:${var.project}-${env}-pii_",
+        ]
+      ])
     }
   }
 

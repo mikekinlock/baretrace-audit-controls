@@ -2,6 +2,8 @@
 
 Account-level detective controls: GuardDuty, CloudTrail, the audit bucket and the security alert topic. Applied **once per account** (one state, one detector, one trail; it creates the alert SSM parameter of both environments, `/baretrace/<stage|production>/audit/security-alert-email`), and **before the first production apply** of baretrace-global-infrastructure (GuardDuty allows one detector per account per region).
 
+Detection beyond GuardDuty (`security.tf`): rule `pii-key-changes` alerts on policy, grant and state changes of the PII and blind-index keys of the environments in `pii_key_environments` (looked up by alias; production is added once its database stack exists); rule `kms-access-denied` (state `ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS`, needed because Decrypt and friends are read-only management events) alerts on any refused KMS cryptographic call; the trail also records Lambda data events (every Invoke) for `baretrace-<env>-admin_service` and `baretrace-<env>-pii_*`. All alerts go to the security alert topic.
+
 ## Read first
 - Project requirements and rules: `../baretrace-global-infrastructure/specs/PROJECT.md` (canonical; wins over anything here).
 - Open tasks: `../baretrace-global-infrastructure/specs/work-queue.md` (section D, T20-T22). Do one task at a time, exactly as written.

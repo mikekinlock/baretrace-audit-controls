@@ -22,6 +22,25 @@ variable "alert_subscription_enabled" {
   type        = bool
 }
 
+variable "pii_key_environments" {
+  description = <<-EOT
+    Environments whose PII and blind-index KMS keys the key-change rule watches
+    (security.tf, pii_key_changes). Those keys belong to baretrace-db-setup, which
+    creates the aliases alias/<project>-<env>-clients-pii and
+    alias/<project>-<env>-guest-mac. This stack looks them up by alias, and a lookup
+    of a key that does not exist yet fails the whole plan, so an environment is
+    listed only once its database stack has been applied. Empty means no key-change
+    rule; the access-denied rule does not depend on it.
+  EOT
+  type        = set(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for env in var.pii_key_environments : contains(["stage", "production"], env)])
+    error_message = "pii_key_environments may contain only \"stage\" and \"production\"."
+  }
+}
+
 # --- Identity ---------------------------------------------------------------
 
 variable "region" {
